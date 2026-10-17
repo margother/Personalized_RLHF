@@ -4,7 +4,7 @@ to prlhf/train_language_model_dpo.py's own main(), but:
   - model_class dispatch extended with "qwen" (UserQwen3ForCausalLM,
     Phase 0's own small addition, see user_qwen_model.py) instead of their
     hardcoded gptneo/gptj/llama.
-  - dataset loading via personalllm_data.load_personalllm_seen_dpo instead
+  - dataset loading via prlhf_data.load_seen_dpo instead
     of their load_openai_comparisons/load_psoups_comparisons/
     load_prism_comparisons.
 UserDPOTrainer/DPOConfig/LoraConfig themselves are reused UNMODIFIED from
@@ -42,7 +42,7 @@ from transformers import AutoTokenizer, set_seed
 from trl import DPOConfig
 from trl.trainer.dpo_trainer import DPOTrainer as _TRLDPOTrainer
 
-from personalllm_data import load_personalllm_seen_dpo
+from prlhf_data import load_seen_dpo
 from user_dpo_trainer import UserDPOTrainer
 from user_language_model import UserGPTNeoForCausalLM, UserGPTJForCausalLM, UserLlamaForCausalLM
 from user_qwen_model import UserQwen3ForCausalLM
@@ -194,7 +194,7 @@ def main():
     # build_prompt() needs it to apply the chat template (see chat: "can we
     # change the convention to that of used in their PSOUPS experiment?!").
     print(f"=== Loading personalllm SEEN train set ({args.train_dataset_path}) ===", flush=True)
-    train_dataset, user2idx, n_users = load_personalllm_seen_dpo(
+    train_dataset, user2idx, n_users = load_seen_dpo(
         args.train_dataset_path, sep=args.sep, n_user_tokens=args.n_user_tokens, tokenizer=tokenizer,
     )
     if args.sanity_check:

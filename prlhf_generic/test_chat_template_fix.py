@@ -22,7 +22,7 @@ from transformers import AutoTokenizer, GenerationConfig
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "prlhf"))
-from personalllm_data import build_prompt
+from prlhf_data import build_prompt
 from user_qwen_model import UserQwen3ForCausalLM
 
 CHECKPOINT_DIR = "/mnt/scratch-dionysus/margot/personalization/prlhf_runs/individual_seen_ut10"

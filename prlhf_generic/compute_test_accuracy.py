@@ -27,7 +27,7 @@ file order, not random (same deterministic-slicing convention as
 fspo_personalllm/generate.py's own "first num_shots, no retrieval").
 
 No generic-user (user_id=0) duplicate rows are added here (unlike
-load_personalllm_seen_dpo's own training-time behavior) -- those exist only
+load_seen_dpo's own training-time behavior) -- those exist only
 to give the generic embedding gradient during training; including them here
 would silently double-count and dilute a REAL per-user population accuracy
 with the (unrelated) generic user's own accuracy.
@@ -54,7 +54,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "prlhf"))
 
-from personalllm_data import build_prompt
+from prlhf_data import build_prompt
 from user_language_model import UserLlamaForCausalLM
 from user_qwen_model import UserQwen3ForCausalLM
 from user_gemma_model import UserGemma3ForCausalLM

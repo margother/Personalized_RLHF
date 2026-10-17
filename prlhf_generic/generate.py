@@ -11,7 +11,7 @@ specific eval code.
 Input population: a resolved dataset JSON built by (our main env's)
 eval/dataset_builders/personalllm_test.py -- read directly as plain JSON
 here, no dpo_LRF import (keeps env_prlhf fully decoupled from our main
-env, same principle personalllm_data.py's own module docstring states).
+env, same principle prlhf_data.py's own module docstring states).
 
 User-id resolution: uses the checkpoint's own user2idx.json (written by
 train_seen.py) to map each real user_id string (e.g. "user_82") to the
@@ -66,7 +66,7 @@ from transformers import AutoTokenizer
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "prlhf"))
 
-from personalllm_data import build_prompt
+from prlhf_data import build_prompt
 from user_language_model import UserLlamaForCausalLM
 from user_qwen_model import UserQwen3ForCausalLM
 from user_gemma_model import UserGemma3ForCausalLM

@@ -92,7 +92,7 @@ def build_prompt(int_id: int, sep: str, n_user_tokens: int, query: str, tokenize
     return user_identifier + sep + chat_query
 
 
-def load_personalllm_seen_dpo(train_path: str, sep: str, n_user_tokens: int, tokenizer, user2idx: Optional[dict] = None):
+def load_seen_dpo(train_path: str, sep: str, n_user_tokens: int, tokenizer, user2idx: Optional[dict] = None):
     """Returns (train_dataset, user2idx, n_users) for the SEEN population.
     user2idx: {original user_id string: int id (1..n_users)} -- pass an
     existing mapping to reuse it (e.g. matching an eval-time mapping),
