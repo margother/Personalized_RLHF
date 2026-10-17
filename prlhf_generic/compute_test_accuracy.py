@@ -140,7 +140,7 @@ def main():
     if getattr(tokenizer, "sep_token", None) is None:
         tokenizer.add_special_tokens({"sep_token": args.sep})
     if tokenizer.bos_token is None:
-        tokenizer.bos_token = tokenizer.eos_token  # see prlhf_personalllm/generate.py's own module docstring.
+        tokenizer.bos_token = tokenizer.eos_token  # see prlhf_generic/generate.py's own module docstring.
 
     prompts, chosens, rejecteds = [], [], []
     for uid, rows in by_user.items():
