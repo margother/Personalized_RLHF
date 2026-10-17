@@ -69,12 +69,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 from personalllm_data import build_prompt
 from user_language_model import UserLlamaForCausalLM
 from user_qwen_model import UserQwen3ForCausalLM
+from user_gemma_model import UserGemma3ForCausalLM
 
 # --model-class dispatch -- see chat: "you forgot PRLHF also" -- mirrors
 # train_seen.py's own MODEL_CLASSES dict exactly (that script already had
 # this; this one hardcoded UserQwen3ForCausalLM directly with no dispatch
 # at all, a real gap for running generation against a Llama checkpoint).
-MODEL_CLASSES = {"llama": UserLlamaForCausalLM, "qwen": UserQwen3ForCausalLM}
+MODEL_CLASSES = {"llama": UserLlamaForCausalLM, "qwen": UserQwen3ForCausalLM, "gemma": UserGemma3ForCausalLM}
 
 
 def parse_args():
@@ -106,6 +107,10 @@ def parse_args():
     # kept-in-sync literal, not a shared import; if GOB_MAX_NEW_TOKENS ever
     # changes, update this line too.
     p.add_argument("--max-new-tokens", type=int, default=1024)
+    p.add_argument("--max-prompt-length", type=int, default=512,
+                   help="Prompt token cap, applied the way TRL's DPOTrainer applied it in training (train_seen.py: truncation_mode=keep_start, "
+                        "after the BOS prepend) so generation sees prompts as they were seen in training. Same value as every other method's "
+                        "prompt cap (SHARED_MAX_PROMPT_LENGTH). 0 disables.")
     return p.parse_args()
 
 
@@ -154,6 +159,13 @@ def main():
     final_ckpt_path = os.path.join(args.checkpoint_dir, "final_ckpt")
     print(f"=== Loading trained adapter from {final_ckpt_path} ===", flush=True)
     model = PeftModel.from_pretrained(base_model, final_ckpt_path, is_trainable=False)
+    # bfloat16 -- see compute_test_accuracy.py's own identical fix (chat:
+    # "could you check on the n10s job?" -> "yes please uniformize"). Same
+    # gap: PeftModel.from_pretrained() loads the adapter checkpoint back in
+    # whatever dtype it was SAVED in, independent of base_model's own
+    # (already bf16) dtype -- base_model's own torch_dtype= above does
+    # nothing for a separately-loaded adapter file.
+    model = model.to(torch.bfloat16)
     model.eval()
     model.cuda()
 
@@ -238,6 +250,8 @@ def main():
     total_pairs = sum(len(u["prompts"]) for u in users.values())
     done = sum(len(v) for v in answers.values())
     t0 = time.time()
+    n_truncated = 0
+    _done0 = done
     with torch.no_grad():
         for uid, u in users.items():
             int_id = user2idx.get(uid, 0)
@@ -247,7 +261,11 @@ def main():
                     continue
                 text = build_prompt(int_id, args.sep, args.n_user_tokens, query, tokenizer)
                 input_ids = tokenizer(text, return_tensors="pt").input_ids
-                input_ids = torch.cat([torch.tensor([[bos_id]]), input_ids], dim=1).to("cuda")
+                input_ids = torch.cat([torch.tensor([[bos_id]]), input_ids], dim=1)
+                if args.max_prompt_length and input_ids.shape[1] > args.max_prompt_length:
+                    input_ids = input_ids[:, :args.max_prompt_length]   # keep_start, as in training
+                    n_truncated += 1
+                input_ids = input_ids.to("cuda")
 
                 output = model.generate(input_ids=input_ids, **generate_kwargs)
                 new_tokens = output[0][input_ids.shape[1]:]
@@ -259,6 +277,7 @@ def main():
                 if done % 20 == 0 or done == total_pairs:
                     print(f"  generated {done}/{total_pairs} ({time.time() - t0:.0f}s elapsed)", flush=True)
 
+    print(f"=== {n_truncated} prompts truncated to {args.max_prompt_length} tokens (keep_start) ===", flush=True)
     print(f"wrote {args.output_path}", flush=True)
 
     # Timing sidecar, same {"inference_time_seconds": ...} shape/filename
@@ -274,7 +293,10 @@ def main():
     # across restarts, same limitation eval/generate.py's own timing has.
     with open(os.path.join(os.path.dirname(args.output_path),
                             f"generation_timing_alpha{dataset['metadata']['alpha']}.json"), "w") as f:
-        json.dump({"inference_time_seconds": time.time() - t0}, f)
+        import socket as _socket
+        json.dump({"timing_scope": "v2_no_model_loading", "inference_time_seconds": time.time() - t0,
+                   "hardware": f"{torch.cuda.get_device_name(0)} x{torch.cuda.device_count()} @ {_socket.gethostname()}",
+                   "n_generations": total_pairs, "n_generations_this_run": done - _done0}, f)
 
     print("[INFO] Script execution completed successfully.", flush=True)
 

@@ -46,6 +46,7 @@ from personalllm_data import load_personalllm_seen_dpo
 from user_dpo_trainer import UserDPOTrainer
 from user_language_model import UserGPTNeoForCausalLM, UserGPTJForCausalLM, UserLlamaForCausalLM
 from user_qwen_model import UserQwen3ForCausalLM
+from user_gemma_model import UserGemma3ForCausalLM
 
 # Compat shim, NOT a P-RLHF/trl bug fix -- an accidental method-NAME
 # collision between two unrelated things: trl==0.10.1's own DPOTrainer.
@@ -110,6 +111,7 @@ MODEL_CLASSES = {
     "gptj": UserGPTJForCausalLM,
     "llama": UserLlamaForCausalLM,
     "qwen": UserQwen3ForCausalLM,
+    "gemma": UserGemma3ForCausalLM,
 }
 
 
@@ -153,6 +155,12 @@ def parse_args():
     p.add_argument("--no-wandb", action="store_true")
     p.add_argument("--wandb-project", default="personalllm")
     p.add_argument("--wandb-run-name", default=None)
+    p.add_argument("--wandb-group", default=None,
+                    help="Sets WANDB_RUN_GROUP so this run groups alongside run_trl_dpo.py's/"
+                         "run_kadapter_dpo.py's own --wandb-group runs (e.g. 'prism/seen_users/dim1') "
+                         "-- unlike those two, this script had no group tag at all before, so its own "
+                         "runs never showed up when browsing wandb grouped by that field. See chat: "
+                         "'would it be possible to integrate in the prism/seen_users/prlhf group?'.")
     return p.parse_args()
 
 
@@ -230,6 +238,8 @@ def main():
 
     if not args.no_wandb:
         os.environ["WANDB_PROJECT"] = args.wandb_project
+        if args.wandb_group:
+            os.environ["WANDB_RUN_GROUP"] = args.wandb_group
 
     run_name = args.wandb_run_name or output_path
     training_args = DPOConfig(
@@ -277,7 +287,18 @@ def main():
     # needs no equivalent cast -- it's a bare model (is_reference=True,
     # already loaded bfloat16 above), never PEFT-wrapped at all.
     pdpo_trainer.model = pdpo_trainer.model.to(torch.bfloat16)
-    pdpo_trainer.train()
+    train_result = pdpo_trainer.train()
+    # timing_scope v2 (dpo_LRF/timing_scope.py): training time = the trainer's own train loop minus its eval passes -- model loading,
+    # tokenisation and checkpoint saving EXCLUDED, same definition as DPO / DPO-LRF. (The launcher used to time the WHOLE script by shell
+    # wall-clock, which included all of those.) Written next to the checkpoint; the launcher registers it.
+    _train_seconds = train_result.metrics.get("train_runtime")
+    if _train_seconds is not None:
+        _train_seconds -= sum(e.get("eval_runtime", 0.0) for e in pdpo_trainer.state.log_history)
+        import json as _json, socket as _socket
+        with open(os.path.join(args.output_dir, "train_timing.json"), "w") as _f:
+            _json.dump({"timing_scope": "v2_no_model_loading", "training_time_seconds": _train_seconds,
+                        "hardware": f"{__import__('torch').cuda.get_device_name(0)} x{__import__('torch').cuda.device_count()} @ {_socket.gethostname()}"}, _f, indent=2)
+        print(f"=== training compute time (excl. loading/eval): {_train_seconds:.0f}s ===", flush=True)
 
     final_ckpt_path = os.path.join(args.output_dir, "final_ckpt")
     pdpo_trainer.save_model(final_ckpt_path)

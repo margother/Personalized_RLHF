@@ -57,10 +57,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 from personalllm_data import build_prompt
 from user_language_model import UserLlamaForCausalLM
 from user_qwen_model import UserQwen3ForCausalLM
+from user_gemma_model import UserGemma3ForCausalLM
 
 # --model-class dispatch -- see generate.py's own identical fix, same chat
 # ("you forgot PRLHF also").
-MODEL_CLASSES = {"llama": UserLlamaForCausalLM, "qwen": UserQwen3ForCausalLM}
+MODEL_CLASSES = {"llama": UserLlamaForCausalLM, "qwen": UserQwen3ForCausalLM, "gemma": UserGemma3ForCausalLM}
 from user_dpo_trainer import UserDPOTrainer
 
 
@@ -97,6 +98,11 @@ def parse_args():
     # point (roughly matches the safe per-GPU load found for the SAME log_softmax-over-vocab
     # OOM pattern in FSPO's own IPO stage this session) -- not yet re-measured for real headroom.
     p.add_argument("--batch-size", type=int, default=4)
+    p.add_argument("--unseen-as-generic", action="store_true",
+                   help="Score EVERY test user with the generic user id 0 instead of skipping users missing from "
+                        "user2idx.json -- how unseen users are handled at generation time (no user token of their "
+                        "own, they route through the generic/common embedding). Used for the UNSEEN population's "
+                        "preference accuracy -- see chat: 'and DPO and P-DPO?'.")
     return p.parse_args()
 
 
@@ -114,8 +120,15 @@ def main():
         test_rows = json.load(f)
     by_user = defaultdict(list)
     for r in test_rows:
-        if r["user_id"] in user2idx:  # SEEN population only -- skip any test user this checkpoint never trained on.
-            by_user[r["user_id"]].append(r)
+        # str() -- user2idx.json's own keys are JSON-loaded (always str), but
+        # r["user_id"] is a JSON INT for Community Alignment (PRISM's own are
+        # already str) -- an unconditional `in`/index against the raw value
+        # silently skipped every CA test row (0 rows survived, then a bare
+        # torch.cat([]) crash downstream) -- same int/str mismatch class as
+        # eval/generate.py's own bon-branch bug found earlier this session.
+        uid = str(r["user_id"])
+        if args.unseen_as_generic or uid in user2idx:  # SEEN population only by default -- skip any test user this checkpoint never trained on.
+            by_user[uid].append(r)
     n_skipped_users = len({r["user_id"] for r in test_rows}) - len(by_user)
     if n_skipped_users:
         print(f"  {n_skipped_users} test-set users not in user2idx (not this checkpoint's seen "
@@ -131,7 +144,7 @@ def main():
 
     prompts, chosens, rejecteds = [], [], []
     for uid, rows in by_user.items():
-        int_id = user2idx[uid]
+        int_id = 0 if args.unseen_as_generic else user2idx[uid]   # 0 = the generic user
         for r in rows[:args.n_test_prompts_per_user]:  # first N, deterministic -- see module docstring.
             prompts.append(build_prompt(int_id, args.sep, args.n_user_tokens, r["prompt"], tokenizer))
             chosens.append(r["chosen"])
@@ -159,6 +172,17 @@ def main():
     policy_base.config.use_cache = False
     final_ckpt_path = os.path.join(args.checkpoint_dir, "final_ckpt")
     policy = PeftModel.from_pretrained(policy_base, final_ckpt_path, is_trainable=False)
+    # bfloat16 -- see chat: "could you check on the n10s job?" -> "yes
+    # please uniformize" (job 330318's own real crash, RuntimeError:
+    # expected mat1 and mat2 to have the same dtype -- found HERE, not in
+    # train_seen.py: PeftModel.from_pretrained() loads the adapter_model.
+    # safetensors checkpoint back in WHATEVER dtype it was SAVED in
+    # (fp32, from a training run that predates train_seen.py's own post-
+    # wrap cast) -- policy_base being bf16 above does nothing for an
+    # adapter loaded from a separate file afterward. Casting the whole
+    # PeftModel again here is the robust fix regardless of what dtype the
+    # checkpoint on disk happens to carry.
+    policy = policy.to(torch.bfloat16)
 
     # is_reference=True -- REQUIRED, same as generate.py's own module docstring: the spliced user
     # embedding becomes a zero-length tensor, i.e. the TRUE untrained reference behavior.
@@ -199,8 +223,11 @@ def main():
     with torch.no_grad():
         for i, batch in enumerate(eval_dataloader):
             _, metrics = trainer.get_batch_loss_metrics(trainer.model, batch, train_eval="eval", return_mean=False)
-            if "eval_rewards/user_each_accuracies" in metrics:
-                all_reward_accuracies.append(metrics["eval_rewards/user_each_accuracies"])
+            # "user_each_accuracies" deliberately EXCLUDES the generic user (id 0, see prlhf/user_dpo_trainer.py) -- so with
+            # --unseen-as-generic (every row scored as user 0) the per-batch accuracies live under "user_00_accuracies".
+            _acc_key = "eval_rewards/user_00_accuracies" if args.unseen_as_generic else "eval_rewards/user_each_accuracies"
+            if _acc_key in metrics:
+                all_reward_accuracies.append(metrics[_acc_key])
             if (i + 1) % 50 == 0:
                 print(f"  {i + 1} eval batches done ({time.time() - t0:.0f}s elapsed)", flush=True)
 
